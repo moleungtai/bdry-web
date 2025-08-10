@@ -1,168 +1,159 @@
-// ---- Helpers ----
+// ====== BDRY vs Stock (Stooq) - Web (Chart.js) with CORS proxy ======
+const YEARS_BACK = 3;              // 改年期就改呢度
+const PROXY = 'https://corsproxy.io/?';  // 重要：解決 iOS Safari CORS
+let chart;
+
+// 工具
 function yyyymmdd(d){
-  return d.getFullYear().toString() + String(d.getMonth()+1).padStart(2,'0') + String(d.getDate()).padStart(2,'0');
+  const mm = String(d.getMonth()+1).padStart(2,'0');
+  const dd = String(d.getDate()).padStart(2,'0');
+  return `${d.getFullYear()}${mm}${dd}`;
 }
+
+// 從 Stooq 取 CSV（日線收市價），經 proxy
 async function fetchStooqDaily(ticker, d1, d2){
-  const url = `https://stooq.com/q/d/l/?s=${ticker.toLowerCase()}.us&d1=${d1}&d2=${d2}&i=d`;
-  const res = await fetch(url, {cache:"no-store"});
+  const raw = `https://stooq.com/q/d/l/?s=${ticker.toLowerCase()}.us&d1=${d1}&d2=${d2}&i=d`;
+  const url = PROXY + encodeURIComponent(raw);
+  const res = await fetch(url, { cache: "no-store" });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const txt = await res.text();
-  if(!txt.startsWith("Date,")) throw new Error("No CSV for "+ticker);
+  if (!txt.startsWith("Date,")) throw new Error(`No data for ${ticker}`);
   const rows = txt.trim().split(/\r?\n/);
-  const head = rows.shift().split(",");
-  const idxD = head.indexOf("Date"), idxC = head.indexOf("Close");
+  const header = rows.shift().split(",");
+  const idxDate = header.indexOf("Date");
+  const idxClose = header.indexOf("Close");
   const out = [];
-  for(const r of rows){
+  for (const r of rows){
     const cols = r.split(",");
-    const date = new Date(cols[idxD]);
-    const close = parseFloat(cols[idxC]);
-    if(!isNaN(close)) out.push({date, close});
+    const dt = new Date(cols[idxDate]);
+    const close = parseFloat(cols[idxClose]);
+    if (!isNaN(close)) out.push({ date: dt, close });
   }
   out.sort((a,b)=>a.date-b.date);
   return out;
 }
 
-function toSeriesMap(arr){ // [{date, close}] -> {dateISO: value}
+function toMap(arr){
   const m = new Map();
-  for(const x of arr){
-    const k = x.date.toISOString().slice(0,10);
-    m.set(k, x.close);
-  }
+  for (const x of arr) m.set(x.date.toISOString().slice(0,10), x.close);
   return m;
 }
-
 function intersectDates(m1, m2){
-  const keys = [];
-  for(const k of m1.keys()) if(m2.has(k)) keys.push(k);
-  keys.sort();
-  return keys;
+  const k = [];
+  for (const key of m1.keys()) if (m2.has(key)) k.push(key);
+  k.sort();
+  return k;
 }
-
-function pctChange(arr){ // daily returns
-  const out=[]; for(let i=1;i<arr.length;i++){ out.push((arr[i]-arr[i-1])/arr[i-1]); } return out;
+function pctReturns(series){
+  const r = [];
+  for (let i=1;i<series.length;i++) r.push((series[i]-series[i-1])/series[i-1]);
+  return r;
 }
-
-function corr(a, b){
-  const n = Math.min(a.length,b.length);
-  if(n<5) return NaN;
+function pearson(a,b){
+  const n = Math.min(a.length, b.length);
+  if (n < 5) return NaN;
   let ma=0, mb=0;
-  for(let i=0;i<n;i++){ ma+=a[i]; mb+=b[i]; }
+  for (let i=0;i<n;i++){ ma+=a[i]; mb+=b[i]; }
   ma/=n; mb/=n;
   let num=0, va=0, vb=0;
-  for(let i=0;i<n;i++){ const da=a[i]-ma, db=b[i]-mb; num+=da*db; va+=da*da; vb+=db*db; }
-  const den = Math.sqrt(va*vb);
-  return den===0 ? NaN : (num/den);
-}
-
-function bestLag(retA, retB, maxLag=120){ // try -maxLag..maxLag
-  let best = {lag:0, corr:-2};
-  for(let L=-maxLag; L<=maxLag; L++){
-    let X=[], Y=[];
-    if(L>=0){
-      X = retA.slice(0, retA.length-L);
-      Y = retB.slice(L, retB.length);
-    }else{
-      X = retA.slice(-L, retA.length);
-      Y = retB.slice(0, retB.length+L);
-    }
-    const c = corr(X, Y);
-    if(!Number.isNaN(c) && Math.abs(c) > Math.abs(best.corr)){
-      best = {lag:L, corr:c, n: Math.min(X.length,Y.length)};
-    }
+  for (let i=0;i<n;i++){
+    const da=a[i]-ma, db=b[i]-mb;
+    num += da*db; va += da*da; vb += db*db;
   }
-  return best;
+  const den = Math.sqrt(va*vb);
+  return den===0 ? NaN : num/den;
+}
+function norm100(arr){
+  if (!arr.length) return arr;
+  const base = arr[0];
+  return arr.map(v=>v/base*100);
 }
 
-function normalizeTo100(values){
-  if(values.length===0) return values;
-  const base = values[0];
-  return values.map(v => v/base*100.0);
-}
-
-// ---- Main ----
-async function run(){
-  const years = parseInt(document.getElementById('years').value || '5', 10);
-  const stocksSel = Array.from(document.getElementById('stocks').selectedOptions).map(o=>o.value);
-  const stocks = stocksSel.length ? stocksSel : ["SBLK","GNK","GOGL","DSX","STNG","FRO"];
+// 主流程
+async function loadData(){
+  const input = document.getElementById('stockSymbol');
+  const sym = (input.value || 'SBLK').trim().toUpperCase();
 
   const end = new Date();
-  const start = new Date(end.getTime() - (365*years+30)*24*3600*1000);
+  const start = new Date(end.getTime() - (365*YEARS_BACK+30)*24*3600*1000);
   const d1 = yyyymmdd(start), d2 = yyyymmdd(end);
 
-  // Fetch BDRY (proxy for BDI)
-  const bdry = await fetchStooqDaily("BDRY", d1, d2);
-  const mBDI = toSeriesMap(bdry);
+  document.getElementById('correlationResult').textContent = '載入中…';
 
-  const traces = [{
-    x: bdry.map(x=>x.date),
-    y: normalizeTo100(bdry.map(x=>x.close)),
-    name: "BDRY (proxy BDI)",
-    mode: "lines",
-    line: {dash:"dash"}
-  }];
+  try{
+    const [bdry, stock] = await Promise.all([
+      fetchStooqDaily('BDRY', d1, d2),
+      fetchStooqDaily(sym, d1, d2)
+    ]);
+    if (!bdry.length || !stock.length) throw new Error('資料不足');
 
-  const tbody = document.querySelector("#result tbody");
-  tbody.innerHTML = "";
-  const summaryRows = [];
+    const bdryX = bdry.map(x=>x.date);
+    const bdryY = norm100(bdry.map(x=>x.close));
+    const stkX  = stock.map(x=>x.date);
+    const stkY  = norm100(stock.map(x=>x.close));
 
-  for(const s of stocks){
-    try{
-      const arr = await fetchStooqDaily(s, d1, d2);
-      const mS = toSeriesMap(arr);
-      const dates = intersectDates(mBDI, mS);
-      const a = dates.map(k=>mBDI.get(k));
-      const b = dates.map(k=>mS.get(k));
-      const retA = pctChange(a);
-      const retB = pctChange(b);
-      const best = bestLag(retA, retB, 120);
+    const mA = toMap(bdry), mB = toMap(stock);
+    const dates = intersectDates(mA, mB);
+    const a = dates.map(k=>mA.get(k));
+    const b = dates.map(k=>mB.get(k));
+    const ra = pctReturns(a), rb = pctReturns(b);
+    const corr = pearson(ra, rb);
+    const N = Math.min(ra.length, rb.length);
 
-      // push table
-      const tr = document.createElement("tr");
-      tr.innerHTML = `<td>${s}</td><td>${best.lag}</td><td>${best.corr.toFixed(3)}</td><td>${best.n}</td>`;
-      tbody.appendChild(tr);
-      summaryRows.push({Stock:s, Best_Lag_Days:best.lag, Max_Corr:best.corr.toFixed(3), N:best.n});
+    const ctx = document.getElementById('comparisonChart').getContext('2d');
+    if (chart) chart.destroy();
+    chart = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: bdryX,
+        datasets: [
+          {
+            label: 'BDRY（起點=100）',
+            data: bdryY,
+            borderColor: '#888',
+            borderWidth: 2,
+            fill: false,
+            tension: 0.1,
+            borderDash: [6,6]
+          },
+          {
+            label: `${sym}（起點=100）`,
+            data: alignSeries(bdryX, stkX, stkY),
+            borderColor: '#1e88e5',
+            borderWidth: 2,
+            fill: false,
+            tension: 0.1
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        scales: {
+          y: { title: { display: true, text: 'Normalized (Start=100)' } },
+          x: { ticks: { maxTicksLimit: 10 } }
+        },
+        plugins: { legend: { position: 'bottom' } }
+      }
+    });
 
-      // trace for chart (normalized to 100)
-      traces.push({
-        x: arr.map(x=>x.date),
-        y: normalizeTo100(arr.map(x=>x.close)),
-        name: s,
-        mode: "lines"
-      });
-    }catch(e){
-      const tr = document.createElement("tr");
-      tr.innerHTML = `<td>${s}</td><td colspan="3">無數據（Stooq 未提供）</td>`;
-      tbody.appendChild(tr);
-    }
+    document.getElementById('correlationResult').textContent =
+      `相關係數（以重疊日回報計）：${isNaN(corr)? '—' : corr.toFixed(3)}　N=${N}`;
+
+  }catch(e){
+    console.error(e);
+    document.getElementById('correlationResult').textContent =
+      `載入失敗：${e.message || e}`;
   }
-
-  Plotly.newPlot("chart", traces, {
-    paper_bgcolor:"#0e1530", plot_bgcolor:"#0e1530",
-    font:{color:"#e7e9f3"},
-    margin:{t:40,l:50,r:20,b:40},
-    legend:{orientation:"h"},
-    yaxis:{title:"Start=100"},
-    xaxis:{title:"Date"}
-  }, {responsive:true});
-
-  // export handler
-  document.getElementById('export').onclick = ()=>{
-    const csv = ["Stock,Best_Lag_Days,Max_Corr,N"].concat(
-      summaryRows.map(r=>`${r.Stock},${r.Best_Lag_Days},${r.Max_Corr},${r.N}`)
-    ).join("\n");
-    const blob = new Blob([csv], {type:"text/csv;charset=utf-8;"});
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = "summary_best_lag.csv";
-    a.click();
-  };
 }
 
-document.getElementById('run').addEventListener('click', ()=>{
-  document.querySelector("#result tbody").innerHTML = "<tr><td colspan='4'>Loading…</td></tr>";
-  run().catch(err=>{
-    document.querySelector("#result tbody").innerHTML = `<tr><td colspan='4'>錯誤：${err}</td></tr>`;
-  });
-});
+// 對齊股票序列去 BDRY 時間軸
+function alignSeries(refX, x, y){
+  const m = new Map();
+  for (let i=0;i<x.length;i++) m.set(x[i].toISOString(), y[i]);
+  return refX.map(d => m.get(d.toISOString()) ?? null);
+}
 
-// auto run on load
-run().catch(()=>{});
+// 允許 Enter 執行
+document.getElementById('stockSymbol').addEventListener('keydown', (e)=>{
+  if (e.key === 'Enter') loadData();
+});
