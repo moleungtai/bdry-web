@@ -1,39 +1,41 @@
-// ===== BDRY -> US Shipping Stocks (multi) with CORS proxy (Chart.js) =====
-const PROXY = 'https://corsproxy.io/?';
-const YEARS_DEFAULT = 3;     // 預設年期
+/* ===== BDRY -> US Shipping Stocks (Multi) | iPhone-ready, no-CORS proxy | Chart.js ===== */
+
+// --- Config ---
+const PROXY = 'https://r.jina.ai/http://'; // read-only proxy with CORS enabled
 const LAG_MIN = -60, LAG_MAX = 60;
+const YEARS_DEFAULT = 3;
 
-let chart;
-
-// -------- DOM helpers --------
+// --- DOM helpers ---
 const $ = s => document.querySelector(s);
-function getStocksInput() {
-  // 嘗試多個常見 id；如果都冇，就取第一個 text/textarea
-  return $('#stocks') || $('#stocksInput') || $('#stockSymbol') ||
-         document.querySelector('input[type="text"], textarea');
+function getStocksInput(){
+  return $('#stocks') || $('#stocksInput') || $('#stockSymbol')
+    || document.querySelector('input[type="text"], textarea');
 }
-function getYearsInput() {
+function getYearsInput(){
   return $('#yearsBack') || $('input[type="number"]') || { value: YEARS_DEFAULT };
 }
-function getRunBtn() {
+function getRunBtn(){
   return $('#runBtn') || $('#run') ||
-         [...document.querySelectorAll('button')].find(b => /run/i.test(b.textContent)) ||
-         $('button');
+    [...document.querySelectorAll('button')].find(b=>/run/i.test(b.textContent)) || $('button');
 }
-function getExportBtn() {
+function getExportBtn(){
   return $('#exportBtn') ||
-         [...document.querySelectorAll('button')].find(b => /export|csv/i.test(b.textContent));
+    [...document.querySelectorAll('button')].find(b=>/export|csv/i.test(b.textContent));
+}
+function setStatus(msg){
+  const el = $('#correlationResult') || $('.status') || $('#status');
+  if(el) el.textContent = msg;
 }
 
-// -------- Utils --------
+// --- Utils ---
+function parseTickers(raw){
+  if(!raw) return [];
+  return raw.split(/[\s,]+/).map(s=>s.trim().toUpperCase()).filter(Boolean);
+}
 function yyyymmdd(d){
   const mm = String(d.getMonth()+1).padStart(2,'0');
   const dd = String(d.getDate()).padStart(2,'0');
   return `${d.getFullYear()}${mm}${dd}`;
-}
-function parseTickers(raw){
-  if(!raw) return [];
-  return raw.split(/[\s,]+/).map(s=>s.trim().toUpperCase()).filter(Boolean);
 }
 function norm100(arr){ if(!arr.length) return arr; const b=arr[0]; return arr.map(v=>v/b*100); }
 function pctReturns(series){ const r=[]; for(let i=1;i<series.length;i++) r.push((series[i]-series[i-1])/series[i-1]); return r; }
@@ -45,11 +47,16 @@ function pearson(a,b){
 }
 function toMap(arr){ const m=new Map(); for(const x of arr) m.set(x.date.toISOString().slice(0,10), x.close); return m; }
 function intersectDates(m1,m2){ const k=[]; for(const key of m1.keys()) if(m2.has(key)) k.push(key); k.sort(); return k; }
+function alignTo(refX, x, y){
+  const m=new Map(); for(let i=0;i<x.length;i++) m.set(x[i].toISOString(), y[i]);
+  return refX.map(d=>m.get(d.toISOString()) ?? null);
+}
 
-// -------- Data --------
+// --- Data fetch (Stooq via proxy) ---
 async function fetchStooqDaily(ticker, d1, d2){
-  const raw = `https://stooq.com/q/d/l/?s=${ticker.toLowerCase()}.us&d1=${d1}&d2=${d2}&i=d`;
-  const url = PROXY + encodeURIComponent(raw);
+  // Stooq CSV (US listing use .us)
+  const raw = `http://stooq.com/q/d/l/?s=${ticker.toLowerCase()}.us&d1=${d1}&d2=${d2}&i=d`;
+  const url = PROXY + raw; // r.jina.ai 需拼「明文 http://」URL，唔好 encode
   const res = await fetch(url, { cache: 'no-store' });
   if(!res.ok) throw new Error(`HTTP ${res.status}`);
   const txt = await res.text();
@@ -69,44 +76,41 @@ async function fetchStooqDaily(ticker, d1, d2){
   return out;
 }
 
-// -------- Core calc (best lag) --------
+// --- Best lag/corr ---
 function bestLagCorr(bdrySeries, stockSeries){
   const mA = toMap(bdrySeries), mB = toMap(stockSeries);
   const dates = intersectDates(mA, mB);
   const a = dates.map(k=>mA.get(k));
   const b = dates.map(k=>mB.get(k));
-  if(a.length<10 || b.length<10) return {lag:null, corr:NaN, N:0};
+  if(a.length<10 || b.length<10) return { lag:null, corr:NaN, N:0 };
 
   let bestLag=0, bestCorr=-2;
   for(let lag=LAG_MIN; lag<=LAG_MAX; lag++){
-    // shift b 對齊 a
     let a2=[], b2=[];
     for(let i=0;i<dates.length;i++){
-      const j=i+lag;
-      if(j<0 || j>=dates.length) continue;
+      const j=i+lag; if(j<0||j>=dates.length) continue;
       a2.push(a[i]); b2.push(b[j]);
     }
     const ra=pctReturns(a2), rb=pctReturns(b2);
     const c = pearson(ra, rb);
     if(Math.abs(c)>Math.abs(bestCorr)){ bestCorr=c; bestLag=lag; }
   }
-  // N 以最佳 lag 的重疊回報長度為準
-  let a2=[], b2=[];
+  // 計算重疊樣本 N
+  let aa=[], bb=[];
   for(let i=0;i<dates.length;i++){
     const j=i+bestLag; if(j<0||j>=dates.length) continue;
-    a2.push(a[i]); b2.push(b[j]);
+    aa.push(a[i]); bb.push(b[j]);
   }
-  const N = Math.min(a2.length-1, b2.length-1);
-  return {lag:bestLag, corr:bestCorr, N:Math.max(0,N)};
+  const N = Math.max(0, Math.min(aa.length-1, bb.length-1));
+  return { lag:bestLag, corr:bestCorr, N };
 }
 
-// -------- Plot & Table --------
-function alignTo(refX, x, y){ const m=new Map(); for(let i=0;i<x.length;i++) m.set(x[i].toISOString(), y[i]); return refX.map(d=>m.get(d.toISOString()) ?? null); }
-
-function setStatus(msg){ const el = $('#correlationResult') || $('.status') || $('#status'); if(el) el.textContent = msg; }
-
+// --- Chart & Table ---
+let chart;
 function renderChart(bdry, seriesDict){
-  const ctx = $('#comparisonChart').getContext('2d');
+  const ctx = $('#comparisonChart')?.getContext('2d');
+  if(!ctx) return;
+
   const labels = bdry.map(x=>x.date);
   const datasets = [{
     label: 'BDRY（起點=100）',
@@ -114,21 +118,25 @@ function renderChart(bdry, seriesDict){
     borderColor: '#888', borderWidth: 2, fill:false, tension:0.1, borderDash:[6,6]
   }];
 
-  const colors = ['#1e88e5','#e53935','#43a047','#8e24aa','#fb8c00','#00acc1','#6d4c41','#3949ab','#c2185b','#7cb342'];
+  const palette = ['#1e88e5','#e53935','#43a047','#8e24aa','#fb8c00','#00acc1','#6d4c41','#3949ab','#c2185b','#7cb342'];
   let idx=0;
   for(const [sym, arr] of Object.entries(seriesDict)){
-    const x = arr.map(x=>x.date), y = norm100(arr.map(x=>x.close));
+    const x = arr.map(p=>p.date), y = norm100(arr.map(p=>p.close));
     datasets.push({
       label: `${sym}（起點=100）`,
       data: alignTo(labels, x, y),
-      borderColor: colors[idx++ % colors.length],
+      borderColor: palette[idx++ % palette.length],
       borderWidth: 2, fill:false, tension:0.1
     });
   }
 
   if(chart) chart.destroy();
-  chart = new Chart(ctx, { type:'line', data:{ labels, datasets },
-    options:{ responsive:true, plugins:{ legend:{ position:'bottom' } },
+  chart = new Chart(ctx, {
+    type:'line',
+    data:{ labels, datasets },
+    options:{
+      responsive:true,
+      plugins:{ legend:{ position:'bottom' } },
       scales:{ y:{ title:{display:true,text:'Normalized (Start=100)'} }, x:{ ticks:{ maxTicksLimit:10 } } }
     }
   });
@@ -142,8 +150,8 @@ function renderTable(results){
     const tr = document.createElement('tr');
     tr.innerHTML = `
       <td>${r.stock}</td>
-      <td>${(r.lag>0 ? '+' : '') + r.lag}</td>
-      <td>${isNaN(r.corr)? '—' : r.corr.toFixed(3)}</td>
+      <td>${r.lag>0?'+':''}${r.lag}</td>
+      <td>${isNaN(r.corr)?'—':r.corr.toFixed(3)}</td>
       <td>${r.N}</td>`;
     tbody.appendChild(tr);
   }
@@ -152,9 +160,7 @@ function renderTable(results){
 function exportCSV(results){
   const header = ['Stock','Best Lag (days)','Max Corr','N (overlap)'];
   const lines = [header.join(',')];
-  for(const r of results){
-    lines.push([r.stock, r.lag, r.corr, r.N].join(','));
-  }
+  for(const r of results){ lines.push([r.stock,r.lag,r.corr,r.N].join(',')); }
   const blob = new Blob([lines.join('\n')], {type:'text/csv'});
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -162,24 +168,24 @@ function exportCSV(results){
   URL.revokeObjectURL(url);
 }
 
-// -------- Main --------
+// --- Main flow ---
 async function run(){
   try{
     setStatus('載入中…');
 
     const stocksRaw = getStocksInput()?.value || '';
     const tickers = parseTickers(stocksRaw);
-    if(tickers.length===0){ setStatus('請輸入至少一隻美股代號（可用逗號或空格分隔）'); return; }
+    if(tickers.length===0){ setStatus('請輸入至少一隻美股代號（空格或逗號分隔）'); return; }
 
     const years = parseInt(getYearsInput().value || YEARS_DEFAULT, 10);
     const end = new Date();
     const start = new Date(end.getTime() - (365*years+30)*24*3600*1000);
     const d1 = yyyymmdd(start), d2 = yyyymmdd(end);
 
-    // 取 BDRY
+    // BDRY 作為 BDI 代理
     const bdry = await fetchStooqDaily('BDRY', d1, d2);
 
-    // 逐隻股取數
+    // 拉股票 & 計算
     const seriesDict = {};
     const results = [];
     for(const sym of tickers){
@@ -193,9 +199,7 @@ async function run(){
       }
     }
 
-    if(Object.keys(seriesDict).length===0){
-      setStatus('Stooq 找不到任何輸入股票的數據。'); return;
-    }
+    if(Object.keys(seriesDict).length===0){ setStatus('Stooq 找不到任何輸入股票的數據。'); return; }
 
     renderChart(bdry, seriesDict);
     renderTable(results.sort((a,b)=>Math.abs(b.corr)-Math.abs(a.corr)));
@@ -208,11 +212,9 @@ async function run(){
   }
 }
 
-// 綁定按鈕
-const runBtn = getRunBtn();
-if(runBtn) runBtn.addEventListener('click', run);
-const exportBtn = getExportBtn();
-if(exportBtn) exportBtn.addEventListener('click', ()=>{
+// --- Bind events ---
+const runBtn = getRunBtn(); if(runBtn) runBtn.addEventListener('click', run);
+const exportBtn = getExportBtn(); if(exportBtn) exportBtn.addEventListener('click', ()=>{
   const tbody = document.querySelector('tbody');
   if(!tbody || !tbody.children.length){ alert('未有結果可匯出。請先 Run。'); return; }
   const rows = [...tbody.children].map(tr=>{
@@ -221,11 +223,5 @@ if(exportBtn) exportBtn.addEventListener('click', ()=>{
   });
   exportCSV(rows);
 });
-
-// 允許 Enter 觸發 Run（焦點在股票輸入框時）
 const stockInput = getStocksInput();
-if(stockInput){
-  stockInput.addEventListener('keydown', e=>{
-    if(e.key==='Enter'){ e.preventDefault(); run(); }
-  });
-}
+if(stockInput){ stockInput.addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); run(); } }); }
