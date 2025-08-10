@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="zh-HK">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>BDRY ➜ US 航運股 領先分析 (Web)</title>
+  <link rel="stylesheet" href="style.css" />
+  <script src="https://cdn.plot.ly/plotly-2.29.1.min.js"></script>
+</head>
+<body>
+  <header>
+    <h1>BDRY ➜ 美國航運股 領先/滯後 分析</h1>
+    <p class="sub">免費資料源（Stooq）。以 BDRY 作為 BDI 的 proxy。</p>
+  </header>
+
+  <section class="panel">
+    <div class="controls">
+      <label>Stocks（可多選，美股代號）：</label>
+      <select id="stocks" multiple>
+        <option value="SBLK">SBLK</option>
+        <option value="GNK">GNK</option>
+        <option value="GOGL">GOGL</option>
+        <option value="DSX">DSX</option>
+        <option value="STNG">STNG</option>
+        <option value="FRO">FRO</option>
+        <option value="MATX">MATX</option>
+        <option value="CMRE">CMRE</option>
+        <option value="DAC">DAC</option>
+        <option value="ZIM">ZIM</option>
+      </select>
+
+      <div class="row">
+        <label>Years back：</label>
+        <input type="number" id="years" value="5" min="1" max="15" />
+        <button id="run">Run</button>
+        <button id="export">Export CSV</button>
+      </div>
+      <div class="note">* 如果某隻股票在 Stooq 無數據，會自動跳過。</div>
+    </div>
+  </section>
+
+  <section class="grid">
+    <div class="card">
+      <h3>對比圖（標準化：起點=100）</h3>
+      <div id="chart" class="chart"></div>
+    </div>
+    <div class="card">
+      <h3>結果表（最佳滯後/領先天數 & 相關性）</h3>
+      <table id="result">
+        <thead><tr><th>Stock</th><th>Best Lag (days)</th><th>Max Corr</th><th>N (overlap)</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <footer>
+    <div>Data: Stooq (BDRY + US tickers). This tool does not constitute investment advice.</div>
+  </footer>
+
+  <script src="main.js"></script>
+</body>
+</html>

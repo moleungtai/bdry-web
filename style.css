@@ -1,0 +1,20 @@
+*{box-sizing:border-box}body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,'Apple Color Emoji','Segoe UI Emoji';color:#1c1c1c;background:#0b1320}
+header{padding:20px 24px;color:#fff;background:linear-gradient(135deg,#182848,#4b6cb7)}
+h1{margin:0 0 6px 0;font-size:24px} .sub{margin:0;opacity:.85}
+.panel{background:#10182f;color:#e7e9f3;padding:16px 24px;border-bottom:1px solid #1d2745}
+.controls{display:flex;flex-direction:column;gap:10px;max-width:900px}
+select#stocks{min-height:120px;background:#0e1530;color:#e7e9f3;border:1px solid #263159;padding:8px;border-radius:8px}
+.row{display:flex;gap:12px;align-items:center}
+button{background:#4b6cb7;color:#fff;border:none;border-radius:8px;padding:8px 14px;font-weight:600;cursor:pointer}
+button:hover{filter:brightness(1.1)}
+input#years{width:80px;padding:6px;border-radius:6px;border:1px solid #263159;background:#0e1530;color:#e7e9f3}
+.note{font-size:12px;opacity:.8}
+.grid{display:grid;grid-template-columns:1fr 420px;gap:16px;padding:16px}
+.card{background:#0e1530;color:#e7e9f3;border:1px solid #1d2745;border-radius:12px;padding:12px}
+.card h3{margin:6px 6px 8px 6px}
+.chart{width:100%;height:560px}
+table{width:100%;border-collapse:collapse}
+th,td{padding:8px;border-bottom:1px solid #223}
+td{font-variant-numeric:tabular-nums}
+footer{color:#9aa3b2;padding:10px 16px}
+@media(max-width:980px){.grid{grid-template-columns:1fr}.chart{height:480px}}
